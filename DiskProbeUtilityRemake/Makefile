@@ -6,8 +6,8 @@ include $(THEOS)/makefiles/common.mk
 
 TOOL_NAME = diskprobe-utility
 
-diskprobe-utility_FILES = Sources/main.m
-diskprobe-utility_CFLAGS = -fobjc-arc
+diskprobe-utility_FILES = Sources/main.m ../DiskProbeRemake/Sources/DPFastScanner.m
+diskprobe-utility_CFLAGS = -fobjc-arc -I$(CURDIR)/../DiskProbeRemake/Sources
 diskprobe-utility_FRAMEWORKS = Foundation QuartzCore
 diskprobe-utility_INSTALL_PATH = /usr/libexec/diskprobe
 diskprobe-utility_CODESIGN_FLAGS = -S$(CURDIR)/entitlements.plist

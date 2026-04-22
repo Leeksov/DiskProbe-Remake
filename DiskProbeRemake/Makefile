@@ -18,6 +18,7 @@ DiskProbe_FILES = \
 	Sources/DPCatalog.m \
 	Sources/DPUserPreferences.m \
 	Sources/DPHelper.m \
+	Sources/DPFastScanner.m \
 	Sources/DPAlert.m \
 	Sources/DPAlertAction.m \
 	Sources/DPBarGraph.m \

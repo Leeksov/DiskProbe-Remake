@@ -3,6 +3,7 @@
 #import "DPCatalog.h"
 #import "DPApplicationUtility.h"
 #import "DPPreviewViewController.h"
+#import "DPTableViewController.h"
 #import <stdlib.h>
 #import <limits.h>
 
@@ -407,10 +408,14 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
 }
 
 - (UIViewController *)infoViewController {
-    // Returns a simple detail VC populated with urlInfo
-    UIViewController *vc = [[UIViewController alloc] init];
-    vc.view.backgroundColor = [UIColor systemBackgroundColor];
+    NSDictionary *data = [self urlInfo];
+    DPTableViewController *vc = [DPTableViewController tableViewControllerWithDataSource:data
+                                                                              cellStyle:UITableViewCellStyleSubtitle];
     vc.title = self.displayName;
+    vc.navigationItem.leftBarButtonItem =
+        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                      target:vc
+                                                      action:@selector(dismiss)];
     return vc;
 }
 

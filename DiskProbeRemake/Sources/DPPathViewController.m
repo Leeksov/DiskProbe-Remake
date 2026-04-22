@@ -493,9 +493,12 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
     if (!leftString || !rightString) {
         NSString *filter = _dataSource.filter;
         if (filter.length > 0) {
-            // Search results: sum bytes of filtered items
+            // Search results: sum bytes of filtered items. Skip symlinks —
+            // their bytes live elsewhere (either already counted via the real
+            // parent in this listing, or entirely off this mount).
             unsigned long long totalBytes = 0;
             for (DPPathInfo *info in _dataSource.data) {
+                if (info.isSymbolicLink) continue;
                 totalBytes += info.bytes;
             }
             NSString *sizeStr = [NSByteCountFormatter stringFromByteCount:(long long)totalBytes
@@ -516,11 +519,13 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
             DPCatalog *cat = [DPCatalog sharedCatalog];
             unsigned long long totalBytes = 0;
             for (DPPathInfo *info in _dataSource.data) {
+                // Skip symlinks — their target is either already counted by
+                // the real parent visible in this listing (e.g. /var -> /private/var
+                // at "/", where /private also appears) or lives off this mount.
+                // Either way, resolving + summing them would double-count.
+                if (info.isSymbolicLink) continue;
                 if (info.isDirectory) {
-                    NSString *p = (info.isSymbolicLink && info.symbolicPath)
-                        ? info.symbolicPath.path
-                        : info.path.path;
-                    totalBytes += [cat sizeForPath:p];
+                    totalBytes += [cat sizeForPath:info.path.path];
                 } else {
                     totalBytes += info.bytes;
                 }
@@ -547,9 +552,13 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
         [_collectionHeader setAttributedText:(NSAttributedString *)rightString label:2];
     }
 
-    // Update bar graph (not in binary's _updateHeaderLabels, but kept from prior behavior)
+    // Update bar graph (not in binary's _updateHeaderLabels, but kept from prior behavior).
+    // Skip symlinks for the same reason as the Directory Size sum above — their
+    // bytes belong to some other tree and would be double-counted alongside
+    // the real parent.
     NSMutableDictionary *dict = [NSMutableDictionary dictionary];
     for (DPPathInfo *info in _dataSource.data) {
+        if (info.isSymbolicLink) continue;
         unsigned long long b = info.bytes;
         if (b > 0 && info.path.path) dict[info.path.path] = @(b);
     }

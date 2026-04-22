@@ -6,6 +6,8 @@
 #import "DPTableViewController.h"
 #import <stdlib.h>
 #import <limits.h>
+#import <MobileCoreServices/MobileCoreServices.h>
+#import <CoreServices/CoreServices.h>
 
 // NSTask is SPI on iOS; declare the minimal selectors we use.
 @interface NSTask : NSObject
@@ -209,6 +211,108 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSDictionary *attrs = [fm attributesOfItemAtPath:self.path.path error:nil] ?: @{};
 
+    // On iOS, -resourceValuesForKeys: often returns nil for many keys on system
+    // directories (paths outside the app sandbox). Build a merged dictionary
+    // that fills in sensible fallbacks from self.path / file attributes so the
+    // Info screen doesn't show "???" for values we can compute locally.
+    NSMutableDictionary *merged = [res mutableCopy] ?: [NSMutableDictionary dictionary];
+
+    // NSURLPathKey → self.path.path
+    if (!merged[NSURLPathKey] && self.path.path.length) {
+        merged[NSURLPathKey] = self.path.path;
+    }
+    // NSURLCanonicalPathKey → standardized path, then realpath(3)
+    if (!merged[NSURLCanonicalPathKey]) {
+        NSString *canonical = self.path.URLByStandardizingPath.path;
+        if (!canonical.length && self.path.path.length) {
+            char resolved[PATH_MAX] = {0};
+            if (realpath(self.path.path.fileSystemRepresentation, resolved) != NULL) {
+                canonical = [fm stringWithFileSystemRepresentation:resolved length:strlen(resolved)];
+            }
+        }
+        if (canonical.length) merged[NSURLCanonicalPathKey] = canonical;
+    }
+    // NSURLParentDirectoryURLKey → parent directory URL (display helper calls -path)
+    if (!merged[NSURLParentDirectoryURLKey]) {
+        NSURL *parent = self.path.URLByDeletingLastPathComponent;
+        if (parent) merged[NSURLParentDirectoryURLKey] = parent;
+    }
+    // NSURLNameKey / NSURLLocalizedNameKey fallbacks
+    if (!merged[NSURLNameKey] && self.name.length) {
+        merged[NSURLNameKey] = self.name;
+    }
+    if (!merged[NSURLLocalizedNameKey]) {
+        merged[NSURLLocalizedNameKey] = self.displayName ?: self.name ?: @"";
+    }
+    // NSURLTypeIdentifierKey → compute from extension
+    NSString *uti = merged[NSURLTypeIdentifierKey];
+    if (!uti.length) {
+        NSString *ext = self.path.pathExtension;
+        if (ext.length) {
+            CFStringRef cfUTI = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension,
+                                                                     (__bridge CFStringRef)ext,
+                                                                     NULL);
+            if (cfUTI) {
+                uti = (__bridge_transfer NSString *)cfUTI;
+                if (uti.length) merged[NSURLTypeIdentifierKey] = uti;
+            }
+        }
+        if (!merged[NSURLTypeIdentifierKey]) {
+            // Directory / regular-file fallback UTIs
+            if ([attrs[NSFileType] isEqualToString:NSFileTypeDirectory]) {
+                merged[NSURLTypeIdentifierKey] = (__bridge NSString *)kUTTypeFolder;
+            } else if ([attrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]) {
+                merged[NSURLTypeIdentifierKey] = (__bridge NSString *)kUTTypeSymLink;
+            } else if (attrs[NSFileType]) {
+                merged[NSURLTypeIdentifierKey] = (__bridge NSString *)kUTTypeData;
+            }
+        }
+    }
+    // NSURLLocalizedTypeDescriptionKey → derive from UTI
+    if (!merged[NSURLLocalizedTypeDescriptionKey] && [merged[NSURLTypeIdentifierKey] length]) {
+        CFStringRef desc = UTTypeCopyDescription((__bridge CFStringRef)merged[NSURLTypeIdentifierKey]);
+        if (desc) {
+            NSString *d = (__bridge_transfer NSString *)desc;
+            if (d.length) merged[NSURLLocalizedTypeDescriptionKey] = d;
+        }
+    }
+    // NSURLAddedToDirectoryDateKey → NSFileCreationDate fallback
+    if (!merged[NSURLAddedToDirectoryDateKey] && attrs[NSFileCreationDate]) {
+        merged[NSURLAddedToDirectoryDateKey] = attrs[NSFileCreationDate];
+    }
+    // Date fallbacks from attrs when NSURL didn't return them
+    if (!merged[NSURLCreationDateKey] && attrs[NSFileCreationDate]) {
+        merged[NSURLCreationDateKey] = attrs[NSFileCreationDate];
+    }
+    if (!merged[NSURLContentModificationDateKey] && attrs[NSFileModificationDate]) {
+        merged[NSURLContentModificationDateKey] = attrs[NSFileModificationDate];
+    }
+    // FileSize fallback
+    if (!merged[NSURLFileSizeKey] && attrs[NSFileSize]) {
+        merged[NSURLFileSizeKey] = attrs[NSFileSize];
+    }
+    // Link count fallback
+    if (!merged[NSURLLinkCountKey] && attrs[NSFileReferenceCount]) {
+        merged[NSURLLinkCountKey] = attrs[NSFileReferenceCount];
+    }
+    // IsApplication fallback — use our own detection
+    if (!merged[NSURLIsApplicationKey]) {
+        merged[NSURLIsApplicationKey] = @(self.isApplication);
+    }
+    // IsDirectory / IsRegularFile / IsSymbolicLink fallbacks from attrs
+    if (!merged[NSURLIsDirectoryKey]) {
+        merged[NSURLIsDirectoryKey] = @([attrs[NSFileType] isEqualToString:NSFileTypeDirectory]);
+    }
+    if (!merged[NSURLIsRegularFileKey]) {
+        merged[NSURLIsRegularFileKey] = @([attrs[NSFileType] isEqualToString:NSFileTypeRegular]);
+    }
+    if (!merged[NSURLIsSymbolicLinkKey]) {
+        merged[NSURLIsSymbolicLinkKey] = @([attrs[NSFileType] isEqualToString:NSFileTypeSymbolicLink]);
+    }
+    if (!merged[NSURLIsHiddenKey]) {
+        merged[NSURLIsHiddenKey] = @(self.isHidden);
+    }
+
     NSMutableArray *sections = [NSMutableArray array];
 
     // -------- Application Info (optional) --------
@@ -233,23 +337,27 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
     // -------- Path Info --------
     {
         NSString *symPath = self.symbolicPath.path;
+        if (!symPath.length && self.path.path.length) {
+            NSString *resolved = [self.path.path stringByResolvingSymlinksInPath];
+            symPath = resolved.length ? resolved : self.path.path;
+        }
         NSArray *rows = @[
             DPRow(DPLocalized(@"Display Name"),
                   self.displayName, @"subtitle"),
             DPRow(DPLocalized(@"Name"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLNameKey inValue:res[NSURLNameKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLNameKey inValue:merged[NSURLNameKey]], @"subtitle"),
             DPRow(DPLocalized(@"Localized Name"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLLocalizedNameKey inValue:res[NSURLLocalizedNameKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLLocalizedNameKey inValue:merged[NSURLLocalizedNameKey]], @"subtitle"),
             DPRow(DPLocalized(@"Path"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLPathKey inValue:res[NSURLPathKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLPathKey inValue:merged[NSURLPathKey]], @"subtitle"),
             DPRow(DPLocalized(@"Absolute Path"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLCanonicalPathKey inValue:res[NSURLCanonicalPathKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLCanonicalPathKey inValue:merged[NSURLCanonicalPathKey]], @"subtitle"),
             DPRow(DPLocalized(@"Symbolic Path"),
                   symPath, @"subtitle"),
             DPRow(DPLocalized(@"Parent Path"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLParentDirectoryURLKey inValue:res[NSURLParentDirectoryURLKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLParentDirectoryURLKey inValue:merged[NSURLParentDirectoryURLKey]], @"subtitle"),
             DPRow(DPLocalized(@"Parent Volume"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLVolumeURLKey inValue:res[NSURLVolumeURLKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLVolumeURLKey inValue:merged[NSURLVolumeURLKey]], @"subtitle"),
         ];
         [sections addObject:DPSection(DPLocalized(@"Path Info"), rows)];
     }
@@ -271,11 +379,11 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
             DPRow(DPLocalized(@"Posix Display"),
                   posixLabel, @"value1"),
             DPRow(DPLocalized(@"Readable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsReadableKey inValue:res[NSURLIsReadableKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsReadableKey inValue:merged[NSURLIsReadableKey]], @"value1"),
             DPRow(DPLocalized(@"Writable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsWritableKey inValue:res[NSURLIsWritableKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsWritableKey inValue:merged[NSURLIsWritableKey]], @"value1"),
             DPRow(DPLocalized(@"Executable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsExecutableKey inValue:res[NSURLIsExecutableKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsExecutableKey inValue:merged[NSURLIsExecutableKey]], @"value1"),
         ];
         [sections addObject:DPSection(DPLocalized(@"Permissions"), rows)];
     }
@@ -284,22 +392,22 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
     {
         NSArray *rows = @[
             DPRow(DPLocalized(@"Creation Date"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLCreationDateKey inValue:res[NSURLCreationDateKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLCreationDateKey inValue:merged[NSURLCreationDateKey]], @"subtitle"),
             DPRow(DPLocalized(@"Modification Date"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLContentModificationDateKey inValue:res[NSURLContentModificationDateKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLContentModificationDateKey inValue:merged[NSURLContentModificationDateKey]], @"subtitle"),
             DPRow(DPLocalized(@"Access Date"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLContentAccessDateKey inValue:res[NSURLContentAccessDateKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLContentAccessDateKey inValue:merged[NSURLContentAccessDateKey]], @"subtitle"),
             DPRow(DPLocalized(@"FS Modification Date"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLAttributeModificationDateKey inValue:res[NSURLAttributeModificationDateKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLAttributeModificationDateKey inValue:merged[NSURLAttributeModificationDateKey]], @"subtitle"),
             DPRow(DPLocalized(@"Added To Directory Date"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLAddedToDirectoryDateKey inValue:res[NSURLAddedToDirectoryDateKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLAddedToDirectoryDateKey inValue:merged[NSURLAddedToDirectoryDateKey]], @"subtitle"),
         ];
         [sections addObject:DPSection(DPLocalized(@"Dates"), rows)];
     }
 
     // -------- File Info --------
     {
-        NSNumber *sizeNum = res[NSURLFileSizeKey];
+        NSNumber *sizeNum = merged[NSURLFileSizeKey];
         NSString *sizeStr = [NSByteCountFormatter stringFromByteCount:[sizeNum longLongValue]
                                                            countStyle:NSByteCountFormatterCountStyleFile];
         NSArray *rows = @[
@@ -312,37 +420,39 @@ static inline NSDictionary *DPSection(NSString *header, NSArray *rows) {
             DPRow(DPLocalized(@"MIME"),
                   [DPHelper mimeTypeForFile:self.path.path], @"subtitle"),
             DPRow(DPLocalized(@"UTI"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLTypeIdentifierKey inValue:res[NSURLTypeIdentifierKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLTypeIdentifierKey inValue:merged[NSURLTypeIdentifierKey]], @"subtitle"),
             DPRow(DPLocalized(@"Localized UTI"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLLocalizedTypeDescriptionKey inValue:res[NSURLLocalizedTypeDescriptionKey]], @"subtitle"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLLocalizedTypeDescriptionKey inValue:merged[NSURLLocalizedTypeDescriptionKey]], @"subtitle"),
             DPRow(DPLocalized(@"Block Size"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLPreferredIOBlockSizeKey inValue:res[NSURLPreferredIOBlockSizeKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLPreferredIOBlockSizeKey inValue:merged[NSURLPreferredIOBlockSizeKey]], @"value1"),
             DPRow(DPLocalized(@"Regular File"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsRegularFileKey inValue:res[NSURLIsRegularFileKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsRegularFileKey inValue:merged[NSURLIsRegularFileKey]], @"value1"),
             DPRow(DPLocalized(@"Directory"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsDirectoryKey inValue:res[NSURLIsDirectoryKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsDirectoryKey inValue:merged[NSURLIsDirectoryKey]], @"value1"),
             DPRow(DPLocalized(@"Symbolic Link"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsSymbolicLinkKey inValue:res[NSURLIsSymbolicLinkKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsSymbolicLinkKey inValue:merged[NSURLIsSymbolicLinkKey]], @"value1"),
             DPRow(DPLocalized(@"Hidden"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsHiddenKey inValue:res[NSURLIsHiddenKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsHiddenKey inValue:merged[NSURLIsHiddenKey]], @"value1"),
             DPRow(DPLocalized(@"Hidden Extension"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLHasHiddenExtensionKey inValue:res[NSURLHasHiddenExtensionKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLHasHiddenExtensionKey inValue:merged[NSURLHasHiddenExtensionKey]], @"value1"),
             DPRow(DPLocalized(@"Volume Root"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsVolumeKey inValue:res[NSURLIsVolumeKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsVolumeKey inValue:merged[NSURLIsVolumeKey]], @"value1"),
             DPRow(DPLocalized(@"Application Root"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsApplicationKey inValue:res[NSURLIsApplicationKey]], @"value1"),
+                  (self.isApplication && [self.applicationBundle isKindOfClass:[NSDictionary class]] && [(NSDictionary *)self.applicationBundle objectForKey:@"CFBundleIdentifier"])
+                      ? [(NSDictionary *)self.applicationBundle objectForKey:@"CFBundleIdentifier"]
+                      : [DPHelper displayValueForNSURLResourceKey:NSURLIsApplicationKey inValue:merged[NSURLIsApplicationKey]], @"value1"),
             DPRow(DPLocalized(@"System Immutable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsSystemImmutableKey inValue:res[NSURLIsSystemImmutableKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsSystemImmutableKey inValue:merged[NSURLIsSystemImmutableKey]], @"value1"),
             DPRow(DPLocalized(@"User Immutable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsUserImmutableKey inValue:res[NSURLIsUserImmutableKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsUserImmutableKey inValue:merged[NSURLIsUserImmutableKey]], @"value1"),
             DPRow(DPLocalized(@"User Immutable"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsMountTriggerKey inValue:res[NSURLIsMountTriggerKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsMountTriggerKey inValue:merged[NSURLIsMountTriggerKey]], @"value1"),
             DPRow(DPLocalized(@"Hard Link Count"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLLinkCountKey inValue:res[NSURLLinkCountKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLLinkCountKey inValue:merged[NSURLLinkCountKey]], @"value1"),
             DPRow(DPLocalized(@"Backup Excluded"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLIsExcludedFromBackupKey inValue:res[NSURLIsExcludedFromBackupKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLIsExcludedFromBackupKey inValue:merged[NSURLIsExcludedFromBackupKey]], @"value1"),
             DPRow(DPLocalized(@"Document ID"),
-                  [DPHelper displayValueForNSURLResourceKey:NSURLDocumentIdentifierKey inValue:res[NSURLDocumentIdentifierKey]], @"value1"),
+                  [DPHelper displayValueForNSURLResourceKey:NSURLDocumentIdentifierKey inValue:merged[NSURLDocumentIdentifierKey]], @"value1"),
         ];
         [sections addObject:DPSection(DPLocalized(@"File Info"), rows)];
     }

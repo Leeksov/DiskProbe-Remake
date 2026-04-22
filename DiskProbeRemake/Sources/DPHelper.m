@@ -157,33 +157,52 @@ static NSArray *_permissionsTable;
     NSSet *dateKeys = [NSSet setWithArray:@[
         NSURLCreationDateKey, NSURLContentAccessDateKey,
         NSURLContentModificationDateKey, NSURLAttributeModificationDateKey,
-        NSURLPreferredIOBlockSizeKey, // fallthrough into number branch handled below
+        NSURLAddedToDirectoryDateKey,
     ]];
     // Number-valued keys that should be stringValue
     NSSet *numberKeys = [NSSet setWithArray:@[
         NSURLFileSizeKey, NSURLFileAllocatedSizeKey, NSURLLinkCountKey,
+        NSURLPreferredIOBlockSizeKey,
     ]];
     // Path-like keys (NSURL)
     NSSet *pathKeys = [NSSet setWithArray:@[
         NSURLParentDirectoryURLKey, NSURLVolumeURLKey,
     ]];
+    // Plain-string NSURLResourceKeys — pass through if non-empty
+    NSSet *stringKeys = [NSSet setWithArray:@[
+        NSURLNameKey, NSURLLocalizedNameKey,
+        NSURLPathKey, NSURLCanonicalPathKey,
+        NSURLTypeIdentifierKey, NSURLLocalizedTypeDescriptionKey,
+    ]];
 
-    if ([key isEqualToString:NSURLNameKey] || [key isEqualToString:NSURLLocalizedNameKey]) {
-        return value;
+    if ([stringKeys containsObject:key]) {
+        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) return value;
+        return @"???";
     }
     if ([boolKeys containsObject:key]) {
+        if (![value isKindOfClass:[NSNumber class]]) return @"???";
         NSBundle *bundle = [NSBundle mainBundle];
         NSString *raw = [value boolValue] ? @"YES" : @"NO";
         return [bundle localizedStringForKey:raw value:@"" table:nil];
     }
     if ([dateKeys containsObject:key]) {
+        if (![value isKindOfClass:[NSDate class]]) return @"???";
         return [DPHelper displayStringForDate:value];
     }
     if ([numberKeys containsObject:key]) {
+        if (![value isKindOfClass:[NSNumber class]]) return @"???";
         return [value stringValue];
     }
     if ([pathKeys containsObject:key]) {
-        return [value path];
+        if ([value isKindOfClass:[NSURL class]] && [[(NSURL *)value path] length]) return [value path];
+        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) return value;
+        return @"???";
+    }
+    // Document identifier — typically NSNumber on supporting filesystems.
+    if ([key isEqualToString:NSURLDocumentIdentifierKey]) {
+        if ([value isKindOfClass:[NSNumber class]]) return [value stringValue];
+        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) return value;
+        return @"???";
     }
     return @"???";
 }

@@ -46,13 +46,17 @@
             // Reject any URL whose parent directory is not the one being
             // enumerated — these leaks make the header sum double/triple
             // count a huge chunk of the volume.
-            NSString *enumeratedDir = [directory stringByStandardizingPath];
-            if (enumeratedDir.length > 1 && [enumeratedDir hasSuffix:@"/"]) {
-                enumeratedDir = [enumeratedDir substringToIndex:enumeratedDir.length - 1];
+            //
+            // Compare parents via resolved/canonical paths so symlinked
+            // mount points like /var (→ /private/var) still match items
+            // whose parent comes back as /private/var.
+            NSString *canonicalDir = [[directory stringByStandardizingPath] stringByResolvingSymlinksInPath];
+            if (canonicalDir.length > 1 && [canonicalDir hasSuffix:@"/"]) {
+                canonicalDir = [canonicalDir substringToIndex:canonicalDir.length - 1];
             }
             for (NSURL *itemURL in enumerator) {
-                NSString *parentPath = [itemURL.path stringByDeletingLastPathComponent];
-                if (![parentPath isEqualToString:enumeratedDir]) {
+                NSString *parentPath = [[itemURL.path stringByDeletingLastPathComponent] stringByResolvingSymlinksInPath];
+                if (![parentPath isEqualToString:canonicalDir]) {
                     continue;
                 }
                 NSNumber *size = nil;

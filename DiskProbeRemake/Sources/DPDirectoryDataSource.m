@@ -2,6 +2,7 @@
 #import "DPUserPreferences.h"
 #import "DPCatalog.h"
 #import "DPHelper.h"
+#import <sys/stat.h>
 
 @implementation DPDirectoryDataSource
 
@@ -38,7 +39,22 @@
                 options:options
                 errorHandler:nil];
 
+            // On iOS the root "/" is a union mount with firmlinks, causing
+            // NSDirectoryEnumerator (even with SkipsSubdirectoryDescendants)
+            // to yield BOTH /var (symlink) AND /private/var (the target's
+            // contents), plus grand-children like /private/var/preferences.
+            // Reject any URL whose parent directory is not the one being
+            // enumerated — these leaks make the header sum double/triple
+            // count a huge chunk of the volume.
+            NSString *enumeratedDir = [directory stringByStandardizingPath];
+            if (enumeratedDir.length > 1 && [enumeratedDir hasSuffix:@"/"]) {
+                enumeratedDir = [enumeratedDir substringToIndex:enumeratedDir.length - 1];
+            }
             for (NSURL *itemURL in enumerator) {
+                NSString *parentPath = [itemURL.path stringByDeletingLastPathComponent];
+                if (![parentPath isEqualToString:enumeratedDir]) {
+                    continue;
+                }
                 NSNumber *size = nil;
                 NSDate *modDate = nil;
                 NSNumber *isSymbolic = nil;
@@ -51,10 +67,21 @@
                 [itemURL getResourceValue:&isHidden forKey:NSURLIsHiddenKey error:nil];
                 [itemURL getResourceValue:&itemName forKey:NSURLNameKey error:nil];
 
+                // NSURLIsSymbolicLinkKey lies for firmlinks on iOS (e.g. /var,
+                // /etc, /tmp — all symlinks to /private/var etc.). Use
+                // lstat(2) as the source of truth so the header-sum
+                // symlink-skip actually excludes them.
+                BOOL symbolicFromLstat = NO;
+                struct stat lst;
+                if (lstat(itemURL.path.fileSystemRepresentation, &lst) == 0) {
+                    symbolicFromLstat = S_ISLNK(lst.st_mode);
+                }
+                BOOL symbolic = [isSymbolic boolValue] || symbolicFromLstat;
+
                 DPPathInfo *info = [DPPathInfo pathInfoWithURL:itemURL
                                                         bytes:[size unsignedLongLongValue]
                                                  modification:modDate
-                                                     symbolic:[isSymbolic boolValue]
+                                                     symbolic:symbolic
                                                        hidden:[isHidden boolValue]];
                 [self.directoryData addObject:info];
             }
@@ -64,6 +91,11 @@
             NSDate *modDate = [attrs fileModificationDate];
             NSString *fileType = [attrs fileType];
             BOOL symbolic = [fileType isEqualToString:NSFileTypeSymbolicLink];
+            // Same iOS-firmlink caveat as above — prefer lstat(2).
+            struct stat plst;
+            if (lstat(directory.fileSystemRepresentation, &plst) == 0) {
+                if (S_ISLNK(plst.st_mode)) symbolic = YES;
+            }
             NSString *last = [dirURL lastPathComponent];
             DPPathInfo *parentInfo = [DPPathInfo pathInfoWithURL:dirURL
                                                           bytes:[bytes unsignedLongLongValue]

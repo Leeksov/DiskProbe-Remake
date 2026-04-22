@@ -33,8 +33,11 @@ Requires [theos](https://theos.dev).
 ```bash
 git clone https://github.com/Leeksov/DiskProbe-Remake.git
 cd DiskProbe-Remake
-make package
+make package                 # rootless (default) — installs under /var/jb
+make package SCHEME=rootful  # rootful — installs under /
 ```
+
+Both schemes build the same source tree; `-DROOTLESS=1` is only defined for the rootless scheme, which flips path prefixes in `DPCatalog`, `DPStreamingTask`, and the postinst.
 
 Optional: install directly to a device via SSH. Set `THEOS_DEVICE_IP` and `THEOS_DEVICE_PASSWORD` in the top-level Makefile, then:
 
@@ -46,11 +49,11 @@ make package install
 
 ```
 .
-├── DiskProbeRootless/          — the app
+├── DiskProbeRemake/            — the app
 │   ├── Sources/                — ~40 Objective-C sources, ARC, iOS 14+
 │   ├── Resources/              — Info.plist, icons, Main.storyboardc
 │   └── entitlements.plist
-├── DiskProbeUtilityRootless/   — the setuid CLI helper
+├── DiskProbeUtilityRemake/     — the setuid CLI helper
 │   └── Sources/main.m          — privileged volume sizer
 ├── Makefile                    — aggregate Theos build (produces a single .deb)
 ├── control                     — package metadata

@@ -1,4 +1,4 @@
-THEOS_PACKAGE_SCHEME = rootless
+# Parent Makefile sets THEOS_PACKAGE_SCHEME (rootless or empty for rootful).
 TARGET = iphone:clang:latest:14.0
 ARCHS = arm64 arm64e
 
@@ -49,7 +49,8 @@ DiskProbe_FILES = \
 	Sources/UIView+DP.m \
 	Sources/UIViewController+DP.m
 
-DiskProbe_CFLAGS = -fobjc-arc -DROOTLESS=1
+# ROOTLESS=1 gates /var/jb path prefixes in the source.
+DiskProbe_CFLAGS = -fobjc-arc $(if $(THEOS_PACKAGE_SCHEME),-DROOTLESS=1,)
 DiskProbe_FRAMEWORKS = UIKit Foundation QuickLook MessageUI SystemConfiguration UserNotifications WebKit AVFoundation AudioToolbox
 DiskProbe_PRIVATE_FRAMEWORKS =
 DiskProbe_LIBRARIES = z bz2 compression

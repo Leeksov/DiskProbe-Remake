@@ -1,6 +1,12 @@
 #!/bin/bash
 
-JB=/var/jb
+# Detect jailbreak prefix: rootless puts everything under /var/jb, rootful
+# installs directly into the root filesystem.
+if [ -d /var/jb ]; then
+    JB=/var/jb
+else
+    JB=
+fi
 
 UICACHE=$JB/usr/bin/uicache
 APP=$JB/Applications/DiskProbe.app

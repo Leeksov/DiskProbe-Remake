@@ -1,4 +1,4 @@
-THEOS_PACKAGE_SCHEME = rootless
+# Parent Makefile sets THEOS_PACKAGE_SCHEME (rootless or empty for rootful).
 TARGET = iphone:clang:latest:14.0
 ARCHS = arm64 arm64e
 

@@ -1,0 +1,26 @@
+# Theos build artifacts
+.theos/
+packages/
+obj/
+*.o
+*.deb
+*.ips
+
+# macOS
+.DS_Store
+
+# IDA Pro artifacts
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.i64
+
+# Temp / reverse-engineering scratch
+diskprobe_extracted/
+Filza/
+FilzaDirProbe.dylib
+FilzaDirProbe_reconstructed.m
+diskprobe_funcs.json
+ru.rejail.*.deb

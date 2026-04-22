@@ -1,0 +1,27 @@
+#!/bin/bash
+
+JB=/var/jb
+
+UICACHE=$JB/usr/bin/uicache
+APP=$JB/Applications/DiskProbe.app
+UTIL=$JB/usr/libexec/diskprobe/diskprobe-utility
+CACHE_DIR=/var/mobile/Library/Caches/com.leeksov.diskprobe
+
+# Register the app with SpringBoard
+if [ -f "$UICACHE" ] && [ -d "$APP" ]; then
+    "$UICACHE" -p "$APP"
+fi
+
+# setuid the utility so the app can spawn it with root privileges
+if [ -f "$UTIL" ]; then
+    chown root:wheel "$UTIL"
+    chmod 6755 "$UTIL"
+fi
+
+# Ensure shared cache directory exists for mobile user
+if [ ! -d "$CACHE_DIR" ]; then
+    mkdir -p "$CACHE_DIR"
+    chown mobile:mobile "$CACHE_DIR"
+fi
+
+exit 0

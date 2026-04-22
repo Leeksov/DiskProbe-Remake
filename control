@@ -1,0 +1,9 @@
+Package: ru.leeksov.diskprobe
+Name: DiskProbe Remake
+Architecture: iphoneos-arm64
+Description: Visually manage your device storage and browse files (rootless). Includes diskprobe-utility for privileged volume scanning. Open-source rebuild of the original DiskProbe.
+Maintainer: Leeksov <leeksov@gmail.com>
+Author: Leeksov <leeksov@gmail.com>
+Section: Utilities
+Version: 1.0.4k-rootless
+Depends: firmware (>= 15.0)

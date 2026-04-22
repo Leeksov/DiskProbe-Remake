@@ -602,14 +602,74 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
     }
 }
 
+// Paths whose deletion is very likely to bootloop the device. A direct
+// match or any sub-path of these triggers an extra confirmation dialog.
+static NSArray<NSString *> *DPDangerousPaths(void) {
+    static NSArray<NSString *> *paths;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        paths = @[
+            @"/", @"/System", @"/System/Library",
+            @"/private", @"/private/var", @"/private/var/mobile", @"/private/var/root",
+            @"/var", @"/var/mobile", @"/var/root",
+            @"/var/jb", @"/var/jb/Applications", @"/var/jb/usr", @"/var/jb/Library",
+            @"/usr", @"/usr/lib", @"/usr/libexec", @"/usr/bin", @"/usr/sbin",
+            @"/bin", @"/sbin", @"/etc", @"/dev",
+            @"/Applications", @"/Library",
+        ];
+    });
+    return paths;
+}
+
+// Returns a non-nil warning string when the given path is a system-critical
+// directory whose deletion is likely to bootloop the device.
+static NSString *DPBootloopWarningForPath(NSString *path) {
+    for (NSString *p in DPDangerousPaths()) {
+        if ([path isEqualToString:p]) {
+            return [NSString stringWithFormat:NSLocalizedString(@"\"%@\" is a critical system directory. Deleting it will very likely bootloop the device and force a full restore.", nil), path];
+        }
+    }
+    return nil;
+}
+
+- (NSArray<DPPathInfo *> *)_currentSelectedInfos {
+    NSMutableArray<DPPathInfo *> *out = [NSMutableArray array];
+    NSArray *selected = _activeViewType == 0
+        ? _tableView.indexPathsForSelectedRows
+        : _collectionView.indexPathsForSelectedItems;
+    for (NSIndexPath *ip in selected) {
+        DPPathInfo *info = [_dataSource infoAtIndexPath:ip];
+        if (info) [out addObject:info];
+    }
+    return out;
+}
+
 - (void)handleDeleteSelectedItems {
     __weak typeof(self) weakSelf = self;
+    NSArray<DPPathInfo *> *infos = [self _currentSelectedInfos];
+    // Collect any dangerous paths in the selection.
+    NSMutableArray<NSString *> *warnings = [NSMutableArray array];
+    for (DPPathInfo *info in infos) {
+        NSString *w = DPBootloopWarningForPath(info.path.path);
+        if (w) [warnings addObject:w];
+    }
+    void (^proceed)(void) = ^{
+        [weakSelf _deleteSelectedItems];
+    };
+    if (warnings.count > 0) {
+        NSString *joined = [warnings componentsJoinedByString:@"\n\n"];
+        [DPAlert makeAlert:^(DPAlert *alert) {
+            [alert title:^{ return NSLocalizedString(@"⚠️ Bootloop Risk", nil); }];
+            [alert message:^{ return [joined stringByAppendingString:@"\n\nAre you absolutely sure?"]; }];
+            [alert destructiveButton:NSLocalizedString(@"I understand, delete", nil) handler:proceed];
+            [alert cancelButton];
+        } showFrom:self.navigationController];
+        return;
+    }
     [DPAlert makeAlert:^(DPAlert *alert) {
         [alert title:^{ return NSLocalizedString(@"Delete Selected", nil); }];
         [alert message:^{ return NSLocalizedString(@"Delete all selected items?", nil); }];
-        [alert destructiveButton:NSLocalizedString(@"Delete", nil) handler:^{
-            [weakSelf _deleteSelectedItems];
-        }];
+        [alert destructiveButton:NSLocalizedString(@"Delete", nil) handler:proceed];
         [alert cancelButton];
     } showFrom:self.navigationController];
 }
@@ -630,12 +690,23 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
 - (void)handleDeleteItemAtIndex:(NSIndexPath *)indexPath {
     DPPathInfo *info = [_dataSource infoAtIndexPath:indexPath];
     __weak typeof(self) weakSelf = self;
+    NSString *warning = DPBootloopWarningForPath(info.path.path);
+    void (^del)(void) = ^{
+        [[DPCatalog sharedCatalog] removeItemAtURL:info.path itemSize:info.bytes updatingCatalog:YES];
+        __strong typeof(weakSelf) s = weakSelf; if (!s) return; [s.dataSource refreshData];
+    };
+    if (warning) {
+        [DPAlert makeAlert:^(DPAlert *alert) {
+            [alert title:^{ return NSLocalizedString(@"⚠️ Bootloop Risk", nil); }];
+            [alert message:^{ return [warning stringByAppendingString:@"\n\nAre you absolutely sure?"]; }];
+            [alert destructiveButton:NSLocalizedString(@"I understand, delete", nil) handler:del];
+            [alert cancelButton];
+        } showFrom:self.navigationController];
+        return;
+    }
     [DPAlert makeAlert:^(DPAlert *alert) {
         [alert title:^{ return [NSString stringWithFormat:NSLocalizedString(@"Delete \"%@\"?", nil), info.displayName]; }];
-        [alert destructiveButton:NSLocalizedString(@"Delete", nil) handler:^{
-            [[DPCatalog sharedCatalog] removeItemAtURL:info.path itemSize:info.bytes updatingCatalog:YES];
-            __strong typeof(weakSelf) s = weakSelf; if (!s) return; [s.dataSource refreshData];
-        }];
+        [alert destructiveButton:NSLocalizedString(@"Delete", nil) handler:del];
         [alert cancelButton];
     } showFrom:self.navigationController];
 }

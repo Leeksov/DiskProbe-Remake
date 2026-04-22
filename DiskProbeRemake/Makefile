@@ -42,6 +42,7 @@ DiskProbe_FILES = \
 	Sources/DPDocument.m \
 	Sources/DPUserNotifications.m \
 	Sources/DPBackgroundKeepAlive.m \
+	Sources/DPUpdateChecker.m \
 	Sources/NSData+DPCompression.m \
 	Sources/NSFileManager+DP.m \
 	Sources/UIColor+DP.m \

@@ -5,5 +5,5 @@ Description: Visually manage your device storage and browse files (rootless). In
 Maintainer: Leeksov <leeksov@gmail.com>
 Author: Leeksov <leeksov@gmail.com>
 Section: Utilities
-Version: 1.0.4k-rootless
+Version: 1.1.0
 Depends: firmware (>= 15.0)

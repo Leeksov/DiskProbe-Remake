@@ -6,6 +6,7 @@
 #import "DPUserPreferences.h"
 #import "DPHelper.h"
 #import "DPBackgroundKeepAlive.h"
+#import "DPUpdateChecker.h"
 #import "UIColor+DP.h"
 
 // Uncaught exception handler — installed via NSSetUncaughtExceptionHandler
@@ -83,6 +84,9 @@ static void DPRunLaunchBeacon(DPAppDelegate *appDelegate,
     // --- 0x1000632AC --------------------------------------------------------
     // Kick off the async catalog fetch.
     [DPCatalog fetchCatalogs];
+
+    // Check GitHub for a newer release (throttled to once per 24h).
+    [DPUpdateChecker checkIfNeeded];
 
     // --- 0x1000632B8 .. 0x10006F214 -----------------------------------------
     // Obfuscated launch beacon: builds two URL strings by indexing a character

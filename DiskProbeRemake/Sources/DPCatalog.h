@@ -37,5 +37,7 @@ typedef NS_OPTIONS(NSUInteger, DPCatalogLoadingState) {
 // Cache
 - (void)saveCache;
 - (void)loadCache;
+- (void)saveExpandedSizesCache;
+- (void)loadExpandedSizesCache;
 
 @end

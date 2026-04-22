@@ -13,6 +13,9 @@
 
 #define DP_UTILITY_DIR (JB_PREFIX @"/usr/libexec/diskprobe")
 #define DP_UTILITY_CATALOG @"/var/mobile/Library/Caches/com.leeksov.diskprobe/diskprobe.catalog"
+#define DP_EXPANDED_CACHE_SUBDIR @"com.leeksov.diskprobe"
+#define DP_EXPANDED_CACHE_FILE @"expanded_sizes.plist"
+#define DP_EXPANDED_TIMESTAMP_KEY @"._dp_timestamp"
 
 static DPCatalog *_sharedCatalog;
 
@@ -24,6 +27,8 @@ static DPCatalog *_sharedCatalog;
 @property (nonatomic, strong) dispatch_queue_t catalogQueue;
 @property (nonatomic, strong) NSMutableSet<NSString *> *pendingSizePaths;
 @property (nonatomic, strong) dispatch_queue_t pendingQueue;
+@property (nonatomic, assign) BOOL expandedCacheDirty;
+@property (nonatomic, assign) BOOL expandedWriteScheduled;
 @end
 
 @implementation DPCatalog
@@ -81,6 +86,7 @@ static DPCatalog *_sharedCatalog;
 + (void)fetchCatalogs {
     DPCatalog *c = [self sharedCatalog];
     [c loadCache];
+    [c loadExpandedSizesCache];
     dispatch_async(c.catalogQueue, ^{
         [c _fetchVolumeInfo];
         [c _fetchDirectoryInfo];
@@ -94,6 +100,15 @@ static DPCatalog *_sharedCatalog;
     [c.directorySizes removeAllObjects];
     [c.volumeInfoMap removeAllObjects];
     [c.applicationInfoMap removeAllObjects];
+
+    // Wipe both on-disk caches: utility mount-scan catalog and app-owned
+    // expanded subdirectory-size cache. Otherwise stale entries would be
+    // re-loaded on next launch (or next fetchCatalogs) and defeat the refresh.
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:[self catalogPath] error:nil];
+    [fm removeItemAtPath:[c _expandedSizesCachePath] error:nil];
+    c.expandedCacheDirty = NO;
+
     [self fetchCatalogs];
 }
 
@@ -282,6 +297,10 @@ static DPCatalog *_sharedCatalog;
                 // Only set the leaf path. Ancestors in directorySizes are mount
                 // totals from the utility and should not be updated.
                 self.directorySizes[path] = @(bytes);
+                // Mark expanded-size cache dirty and schedule a debounced
+                // write so sizes survive a relaunch without pegging flash IO.
+                self.expandedCacheDirty = YES;
+                [self _scheduleExpandedSizesCacheWrite];
             }
             @synchronized (self.pendingSizePaths) {
                 [self.pendingSizePaths removeObject:path];
@@ -336,6 +355,10 @@ static DPCatalog *_sharedCatalog;
             }
             path = path.stringByDeletingLastPathComponent;
         }
+        // On-disk expanded cache is now stale for the affected ancestors;
+        // schedule a rewrite so the subtraction survives a relaunch.
+        self.expandedCacheDirty = YES;
+        [self _scheduleExpandedSizesCacheWrite];
     }
     return YES;
 }
@@ -389,6 +412,128 @@ static DPCatalog *_sharedCatalog;
         if ([key hasPrefix:@"._dp_"]) continue;
         self.directorySizes[key] = plist[key];
     }
+}
+
+#pragma mark - Expanded-sizes cache (app-owned)
+
+// Debounce expanded-size cache writes: during a batch of async computes we
+// may see dozens of completions per second. Coalesce into a single write at
+// most every 2 seconds so we don't churn the flash.
+- (void)_scheduleExpandedSizesCacheWrite {
+    @synchronized (self) {
+        if (self.expandedWriteScheduled) return;
+        self.expandedWriteScheduled = YES;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @synchronized (self) {
+            self.expandedWriteScheduled = NO;
+        }
+        if (self.expandedCacheDirty) {
+            [self saveExpandedSizesCache];
+        }
+    });
+}
+
+// App-sandbox Caches-dir path. Unlike the utility catalog, writes here
+// don't need the setuid helper. Persists async-computed subdirectory sizes
+// across launches.
+- (NSString *)_expandedSizesCachePath {
+    NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+    NSString *base = dirs.firstObject ?: NSTemporaryDirectory();
+    NSString *dir = [base stringByAppendingPathComponent:DP_EXPANDED_CACHE_SUBDIR];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    return [dir stringByAppendingPathComponent:DP_EXPANDED_CACHE_FILE];
+}
+
+- (void)saveExpandedSizesCache {
+    // Snapshot the current directorySizes. directorySizes is mutated on
+    // main; this method is expected to be called on main (debounce timer
+    // dispatches there). Skip service keys starting with "._dp_".
+    NSMutableDictionary *snapshot = [NSMutableDictionary dictionary];
+    for (NSString *key in self.directorySizes) {
+        if ([key hasPrefix:@"._dp_"]) continue;
+        NSNumber *val = self.directorySizes[key];
+        if (![val isKindOfClass:[NSNumber class]]) continue;
+        if (val.unsignedLongLongValue == 0) continue; // don't persist empties
+        snapshot[key] = val;
+    }
+    // Stamp so loadExpandedSizesCache can enforce cacheExpirationLimit.
+    snapshot[DP_EXPANDED_TIMESTAMP_KEY] = @([NSDate date].timeIntervalSince1970);
+
+    NSError *err = nil;
+    NSData *data = [NSPropertyListSerialization dataWithPropertyList:snapshot
+                                                              format:NSPropertyListBinaryFormat_v1_0
+                                                             options:0
+                                                                error:&err];
+    if (!data) {
+        NSLog(@"[DiskProbe] saveExpandedSizesCache: plist serialization failed: %@", err);
+        return;
+    }
+    NSString *path = [self _expandedSizesCachePath];
+    if (![data writeToFile:path atomically:YES]) {
+        NSLog(@"[DiskProbe] saveExpandedSizesCache: write to %@ failed", path);
+        return;
+    }
+    self.expandedCacheDirty = NO;
+}
+
+- (void)loadExpandedSizesCache {
+    NSString *path = [self _expandedSizesCachePath];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) return;
+
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return;
+
+    NSError *err = nil;
+    NSDictionary *plist = [NSPropertyListSerialization propertyListWithData:data
+                                                                    options:NSPropertyListImmutable
+                                                                     format:nil
+                                                                      error:&err];
+    if (![plist isKindOfClass:[NSDictionary class]]) {
+        NSLog(@"[DiskProbe] loadExpandedSizesCache: malformed plist at %@ (%@)", path, err);
+        return;
+    }
+
+    // Honor prefs.cacheExpirationLimit. Default is 3600s (same pref that
+    // gates catalogValid). A missing/zero/negative timestamp is treated as
+    // stale so a corrupted or pre-versioning file cannot leak sizes past
+    // the user's chosen TTL.
+    NSTimeInterval limit = (NSTimeInterval)[DPUserPreferences sharedPreferences].cacheExpirationLimit;
+    if (limit <= 0) limit = 3600.0;
+
+    NSNumber *tsNum = plist[DP_EXPANDED_TIMESTAMP_KEY];
+    NSTimeInterval ts = [tsNum isKindOfClass:[NSNumber class]] ? tsNum.doubleValue : 0.0;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSTimeInterval age = now - ts;
+
+    if (ts <= 0 || age > limit) {
+        NSLog(@"[DiskProbe] loadExpandedSizesCache: rejecting stale cache (age=%.0fs, limit=%.0fs) at %@",
+              age, limit, path);
+        // Remove so we don't keep re-evaluating a dead file.
+        [fm removeItemAtPath:path error:nil];
+        return;
+    }
+
+    NSUInteger merged = 0;
+    for (NSString *key in plist) {
+        if ([key hasPrefix:@"._dp_"]) continue;
+        NSNumber *val = plist[key];
+        if (![val isKindOfClass:[NSNumber class]]) continue;
+        if (val.unsignedLongLongValue == 0) continue;
+        // Don't stomp existing entries (utility mount totals loaded by
+        // loadCache just before us — collision in practice is unlikely
+        // since utility keys are mount roots, but be safe).
+        if (self.directorySizes[key]) continue;
+        self.directorySizes[key] = val;
+        merged++;
+    }
+    NSLog(@"[DiskProbe] loadExpandedSizesCache: merged %lu entries (age=%.0fs, limit=%.0fs)",
+          (unsigned long)merged, age, limit);
 }
 
 @end

@@ -45,7 +45,10 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
 @property (nonatomic, strong) QLPreviewController *previewController;
 @end
 
-@implementation DPPathViewController
+@implementation DPPathViewController {
+    BOOL _pendingReload;
+    BOOL _swipeActive;
+}
 
 + (instancetype)directoryViewControllerWithDirectory:(NSString *)directory {
     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Main" bundle:nil];
@@ -337,10 +340,25 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
 }
 
 - (void)refreshActiveView {
+    // If the user is editing the table (multi-select) or mid-swipe on a row,
+    // reloading the table would cancel their selection / dismiss the swipe.
+    // Defer until the gesture ends.
+    if (_activeViewType == 0 && (self.isEditing || _swipeActive)) {
+        _pendingReload = YES;
+        return;
+    }
+    _pendingReload = NO;
     if (_activeViewType == 0) {
         [_tableView reloadData];
     } else {
         [_collectionView reloadData];
+    }
+}
+
+- (void)_flushPendingReloadIfNeeded {
+    if (_pendingReload && !self.isEditing && !_swipeActive) {
+        _pendingReload = NO;
+        [self refreshActiveView];
     }
 }
 
@@ -599,7 +617,18 @@ static NSString *const kDPNotificationSetViewType   = @"DPNotificationSetViewTyp
         for (NSIndexPath *ip in [_collectionView.indexPathsForSelectedItems copy]) {
             [_collectionView deselectItemAtIndexPath:ip animated:NO];
         }
+        // Catch up on any reload that was deferred while editing.
+        [self _flushPendingReloadIfNeeded];
     }
+}
+
+- (void)tableView:(UITableView *)tableView willBeginEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+    _swipeActive = YES;
+}
+
+- (void)tableView:(UITableView *)tableView didEndEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+    _swipeActive = NO;
+    [self _flushPendingReloadIfNeeded];
 }
 
 // Paths whose deletion is very likely to bootloop the device. A direct

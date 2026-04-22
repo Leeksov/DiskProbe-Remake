@@ -129,7 +129,7 @@ static NSNumber *sizeOfDirectory(NSString *path, NSMutableDictionary *dict, NSAr
         // classic NSDirectoryEnumerator walk.
         NSFileManager *fm = [NSFileManager defaultManager];
         NSURL *url = [NSURL fileURLWithPath:path];
-        NSArray *keys = @[NSURLFileSizeKey, NSURLIsSymbolicLinkKey];
+        NSArray *keys = @[NSURLFileAllocatedSizeKey, NSURLIsSymbolicLinkKey];
         NSDirectoryEnumerator *en = [fm enumeratorAtURL:url
                              includingPropertiesForKeys:keys
                                                 options:NSDirectoryEnumerationSkipsSubdirectoryDescendants
@@ -142,7 +142,7 @@ static NSNumber *sizeOfDirectory(NSString *path, NSMutableDictionary *dict, NSAr
             NSString *entryPath = [entry path];
             if ([excluded containsObject:entryPath]) continue;
             NSNumber *fileSize = nil, *isSymlink = nil;
-            [entry getResourceValue:&fileSize forKey:NSURLFileSizeKey error:NULL];
+            [entry getResourceValue:&fileSize forKey:NSURLFileAllocatedSizeKey error:NULL];
             [entry getResourceValue:&isSymlink forKey:NSURLIsSymbolicLinkKey error:NULL];
             NSNumber *size = fileSize;
             if ([isSymlink boolValue]) {

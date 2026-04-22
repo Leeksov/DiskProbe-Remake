@@ -204,7 +204,7 @@ static NSArray *_permissionsTable;
         // 0 for a non-empty (but slow-to-query) tree.
         NSFileManager *fm = [NSFileManager defaultManager];
         NSURL *url = [NSURL fileURLWithPath:path];
-        NSArray *keys = @[NSURLFileSizeKey, NSURLIsSymbolicLinkKey, NSURLIsRegularFileKey];
+        NSArray *keys = @[NSURLFileAllocatedSizeKey, NSURLIsSymbolicLinkKey, NSURLIsRegularFileKey];
         NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:url
                                     includingPropertiesForKeys:keys
                                                        options:0
@@ -219,7 +219,7 @@ static NSArray *_permissionsTable;
             if (isSymlink.boolValue) continue;
             [fileURL getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:NULL];
             if (!isRegular.boolValue) continue;
-            [fileURL getResourceValue:&sizeNum forKey:NSURLFileSizeKey error:NULL];
+            [fileURL getResourceValue:&sizeNum forKey:NSURLFileAllocatedSizeKey error:NULL];
             total += sizeNum.unsignedLongLongValue;
         }
     }

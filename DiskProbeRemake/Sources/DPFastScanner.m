@@ -53,7 +53,7 @@ typedef struct entry_s {
     uint32_t         err;
     attrreference_t  nameref;
     fsobj_type_t     obj_type;
-    off_t            data_length;
+    off_t            alloc_size;
 } __attribute__((packed)) entry_t;
 
 static void build_attrlist(struct attrlist *al) {
@@ -61,7 +61,7 @@ static void build_attrlist(struct attrlist *al) {
     al->bitmapcount = ATTR_BIT_MAP_COUNT;
     al->commonattr  = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_ERROR
                     | ATTR_CMN_NAME | ATTR_CMN_OBJTYPE;
-    al->fileattr    = ATTR_FILE_DATALENGTH;
+    al->fileattr    = ATTR_FILE_ALLOCSIZE;
 }
 
 // Shared state for recursive parallel walks.
@@ -120,7 +120,7 @@ static void scan_dir_shared(const char *path, scan_ctx_t *sctx) {
             fsobj_type_t ot = e->obj_type;
             if (ot == VREG) {
                 atomic_fetch_add_explicit(&sctx->total,
-                                          (uint64_t)e->data_length,
+                                          (uint64_t)e->alloc_size,
                                           memory_order_relaxed);
             } else if (ot == VDIR) {
                 size_t nlen = strlen(name);
@@ -254,7 +254,7 @@ static int scan_dir_bulk_cb(const char *path,
                     child[plen + 1 + nlen] = '\0';
                     if (!path_excluded(child, excluded)) {
                         if (ot == VREG) {
-                            total += (uint64_t)e->data_length;
+                            total += (uint64_t)e->alloc_size;
                             items++;
                         } else if (ot == VDIR) {
                             uint64_t sub = 0, sub_items = 0;
